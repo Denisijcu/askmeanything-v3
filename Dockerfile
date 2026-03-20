@@ -26,7 +26,7 @@ from huggingface_hub import snapshot_download
 snapshot_download(
     repo_id="Qwen/Qwen2.5-0.5B-Instruct",
     local_dir="/model-cache/Qwen2.5-0.5B-Instruct",
-    ignore_patterns=["*.bin"],   # prefer .safetensors
+    ignore_patterns=["*.bin"],
 )
 print("[+] Model downloaded successfully.")
 EOF
@@ -47,13 +47,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Python dependencies
-#    torch CPU-only (~200 MB extra) — keeps RAM usage manageable
+# 2a. Install torch CPU-only FIRST (separado para evitar conflicto con --index-url)
+RUN pip install --no-cache-dir \
+        torch==2.4.1 \
+        --index-url https://download.pytorch.org/whl/cpu
+
+# 2b. Install resto de dependencias Python (sin --index-url)
 RUN pip install --no-cache-dir \
         flask \
         gunicorn \
         transformers==4.45.2 \
-        torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu \
         accelerate \
         safetensors
 
@@ -62,7 +65,6 @@ COPY --from=model-downloader /model-cache/Qwen2.5-0.5B-Instruct \
      /opt/aria/model/Qwen2.5-0.5B-Instruct
 
 # 4. Update LLM_MODEL_NAME to use local path (no HuggingFace download at runtime)
-#    app.py reads LLM_MODEL_NAME; we override it via env so the code stays clean
 ENV LLM_MODEL_NAME="/opt/aria/model/Qwen2.5-0.5B-Instruct"
 
 # 5. Create directory structure for the challenge
@@ -98,9 +100,7 @@ RUN echo "HTB{pr0mpt_1nj3ct10n_1s_r34l_d4ng3r}"  > /home/htbuser/user.txt && \
 # 9. Copy application
 COPY app.py /app/app.py
 
-# 10. Fix ownership — htbuser needs write access to:
-#     - /app          → SQLite database (defense_memory.db)
-#     - /opt/aria     → module hijack path for privesc
+# 10. Fix ownership
 RUN chown -R htbuser:htbuser /app /opt/aria
 
 # 11. Drop to unprivileged user
@@ -109,9 +109,6 @@ USER htbuser
 EXPOSE 5000
 
 # 12. Gunicorn: 1 worker + 4 threads
-#     - 1 worker avoids loading the 500 MB model twice
-#     - threads allow the web to stay responsive while inference runs
-#     - 180s timeout because first inference on CPU can take ~30-60s
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:5000", \
      "--workers", "1", \
