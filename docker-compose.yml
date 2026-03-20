@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  askmeanything:
+    build: .
+    container_name: askmeanything
+    ports:
+      - "1337:5000"
+    environment:
+      - FLAG=HTB{pr0mpt_1nj3ct10n_1s_r34l_d4ng3r}
+    # 2 CPU + 3.5 GB RAM cap — realistic for an HTB Easy-Medium box
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3500M
+    restart: unless-stopped
