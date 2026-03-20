@@ -11,16 +11,13 @@
 # ║    5. sudo run_task.py → Python module hijack → root                    ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 
-# ── Stage 1: Download the model (cached layer, only re-runs if changed) ───
+# ── Stage 1: Download the model ───────────────────────────────────────────
 FROM python:3.11-slim AS model-downloader
 
 WORKDIR /model-cache
 
-# Install only what's needed to pull the model
 RUN pip install --no-cache-dir huggingface_hub transformers
 
-# Pre-download Qwen2.5-0.5B-Instruct (~500 MB) at build time
-# This keeps the final image self-contained; no internet needed at runtime
 RUN python - <<'EOF'
 from huggingface_hub import snapshot_download
 snapshot_download(
@@ -42,17 +39,24 @@ LABEL htb.version="2.0"
 
 WORKDIR /app
 
-# 1. System dependencies
+# 1. System dependencies + OpenSSH
 RUN apt-get update && apt-get install -y --no-install-recommends \
         sudo \
+        openssh-server \
     && rm -rf /var/lib/apt/lists/*
 
-# 2a. Install torch CPU-only FIRST (separado para evitar conflicto con --index-url)
+# 2. Configure SSH
+RUN mkdir /var/run/sshd && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+
+# 3a. Install torch CPU-only
 RUN pip install --no-cache-dir \
         torch==2.4.1 \
         --index-url https://download.pytorch.org/whl/cpu
 
-# 2b. Install resto de dependencias Python (sin --index-url)
+# 3b. Install rest of Python deps
 RUN pip install --no-cache-dir \
         flask \
         gunicorn \
@@ -60,18 +64,18 @@ RUN pip install --no-cache-dir \
         accelerate \
         safetensors
 
-# 3. Copy pre-downloaded model from build stage
+# 4. Copy pre-downloaded model
 COPY --from=model-downloader /model-cache/Qwen2.5-0.5B-Instruct \
      /opt/aria/model/Qwen2.5-0.5B-Instruct
 
-# 4. Update LLM_MODEL_NAME to use local path (no HuggingFace download at runtime)
+# 5. Set model path env
 ENV LLM_MODEL_NAME="/opt/aria/model/Qwen2.5-0.5B-Instruct"
 
-# 5. Create directory structure for the challenge
+# 6. Create directory structure
 RUN mkdir -p /opt/aria/tasks/modules /opt/aria/config && \
     echo "Qwen/Qwen2.5-0.5B-Instruct" > /opt/aria/config/system_prompt.txt
 
-# 6. Create the vulnerable maintenance script (Python module hijack vector)
+# 7. Create vulnerable maintenance script (Python module hijack vector)
 RUN printf '%s\n' \
     '#!/usr/bin/env python3' \
     'import sys, os' \
@@ -85,33 +89,33 @@ RUN printf '%s\n' \
     > /opt/aria/tasks/run_task.py && \
     chmod +x /opt/aria/tasks/run_task.py
 
-# 7. Create unprivileged user + sudo policy (the privesc vector)
+# 8. Create htbuser with correct password + sudo policy
 RUN useradd -m -u 1000 -s /bin/bash htbuser && \
+    echo "htbuser:Service2026!AMC" | chpasswd && \
     echo "htbuser ALL=(ALL) NOPASSWD: /opt/aria/tasks/run_task.py" \
         > /etc/sudoers.d/htbuser && \
     chmod 440 /etc/sudoers.d/htbuser
 
-# 8. Plant flags
-RUN echo "HTB{pr0mpt_1nj3ct10n_1s_r34l_d4ng3r}"  > /home/htbuser/user.txt && \
-    echo "HTB{askm3nyth1ng_r34l1st1c_v2_4ppr0v3d}" > /root/root.txt && \
+# 9. Plant flags (MD5 format — HTB standard)
+RUN echo "130d44e1376493212c187abd3047c373" > /home/htbuser/user.txt && \
+    echo "1cd55876411049351002598b4a2fa229" > /root/root.txt && \
     chown htbuser:htbuser /home/htbuser/user.txt && \
     chmod 400 /home/htbuser/user.txt /root/root.txt
 
-# 9. Copy application
+# 10. Copy application
 COPY app.py /app/app.py
 
-# 10. Fix ownership
+# 11. Fix ownership
 RUN chown -R htbuser:htbuser /app /opt/aria
 
-# 11. Drop to unprivileged user
-USER htbuser
+# 12. Startup script — runs SSH + Gunicorn together
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'service ssh start' \
+    'exec gunicorn --bind 0.0.0.0:5000 --workers 1 --threads 4 --timeout 180 app:app' \
+    > /start.sh && chmod +x /start.sh
 
-EXPOSE 5000
+EXPOSE 22 5000
 
-# 12. Gunicorn: 1 worker + 4 threads
-CMD ["gunicorn", \
-     "--bind", "0.0.0.0:5000", \
-     "--workers", "1", \
-     "--threads", "4", \
-     "--timeout", "180", \
-     "app:app"]
+# 13. Run as root so SSH can start, Gunicorn handles the app
+CMD ["/start.sh"]
