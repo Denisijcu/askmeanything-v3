@@ -6,9 +6,9 @@ services:
     container_name: askmeanything
     ports:
       - "1337:5000"
+      - "2222:22"
     environment:
-      - FLAG=HTB{pr0mpt_1nj3ct10n_1s_r34l_d4ng3r}
-    # 2 CPU + 3.5 GB RAM cap — realistic for an HTB Easy-Medium box
+      - FLAG=130d44e1376493212c187abd3047c373
     deploy:
       resources:
         limits:
