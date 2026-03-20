@@ -19,9 +19,8 @@ from datetime import datetime
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-SECRET_FLAG = os.environ.get("FLAG", "HTB{pr0mpt_1nj3ct10n_1s_r34l_d4ng3r}")
-
-LLM_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
+SECRET_FLAG    = os.environ.get("FLAG", "HTB{pr0mpt_1nj3ct10n_1s_r34l_d4ng3r}")
+LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct")
 MAX_NEW_TOKENS  = 256
 LLM_TEMPERATURE = 0.7
 
@@ -51,9 +50,6 @@ def _load_model():
     except Exception as exc:
         _llm_error = str(exc)
         print(f"[!] LLM load failed: {exc}")
-
-threading.Thread(target=_load_model, daemon=True).start()
-
 
 # ─── DB ───────────────────────────────────────────────────────────────────────
 def init_db():
@@ -105,6 +101,11 @@ def get_system_state():
     state = _get_state_from_conn(c)
     conn.close()
     return state
+
+
+# ─── INIT DB + START LLM THREAD (runs when Gunicorn imports the module) ───────
+init_db()
+threading.Thread(target=_load_model, daemon=True).start()
 
 
 # ─── LLM INFERENCE ────────────────────────────────────────────────────────────
